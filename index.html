@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Pokémon Trainer Cards — Updated</title>
+
+  <!-- Tailwind -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- Papa Parse -->
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
+  <style>
+    body { font-family: 'Trebuchet MS', sans-serif; }
+
+    /* Container only handles size + perspective; no border/bg here */
+    .pokemon-card {
+      position: relative;
+      width: 340px; height: 480px;
+      border-radius: 18px;
+      overflow: visible;
+      transition: transform 0.25s;
+      perspective: 1200px; /* for 3D flip */
+      cursor: pointer;
+    }
+    .pokemon-card:hover { transform: scale(1.03); }
+
+    /* Inner flips */
+    .card-inner {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      transition: transform 0.7s;
+      transform-style: preserve-3d;
+    }
+    .pokemon-card.flipped .card-inner {
+      transform: rotateY(180deg);
+    }
+
+    /* Each face owns the border/background/shadow so the WHOLE card flips */
+    .card-face {
+      position: absolute;
+      inset: 0;
+      border-radius: 18px;
+      border: 6px solid #b4b4b4;
+      background: linear-gradient(145deg, #222 0%, #333 30%, #111 100%);
+      overflow: hidden;
+      box-shadow: 0 12px 25px rgba(0,0,0,0.6);
+      backface-visibility: hidden;
+    }
+    .card-front { transform: rotateY(0); }
+    .card-back {
+      transform: rotateY(180deg);
+      background: linear-gradient(145deg, #18181b 0%, #232326 60%);
+    }
+
+    .card-artwork {
+      position:absolute; top:55px; bottom:120px; left:10px; right:10px;
+      border-radius: 12px; display:flex; align-items:center; justify-content:center;
+      background: radial-gradient(circle at center, #222 0%, #000 100%);
+    }
+    .card-artwork img {
+      max-width:90%; max-height:100%; object-fit:contain;
+      filter: drop-shadow(0 4px 6px rgba(0,0,0,0.6));
+    }
+    .card-header {
+      position:absolute; top:8px; left:12px; right:12px;
+      display:flex; justify-content:space-between; align-items:center;
+      font-weight:700; font-size:20px;
+      color:#fff; text-shadow:2px 2px 6px #000;
+      z-index:1;
+    }
+    .card-header span:last-child { font-size:18px; color:#ff5c5c; font-weight:900; text-shadow:1px 1px 2px #000; }
+    .card-footer {
+      position:absolute; left:0; right:0; bottom:0;
+      padding:14px; color:#fff; font-size:14px;
+      background:linear-gradient(to top, rgba(0,0,0,0.9), rgba(0,0,0,0.2));
+      z-index:1;
+    }
+    .info-box {
+      display:flex; align-items:center; gap:8px;
+      margin-top:6px; padding:6px 10px; border-radius:8px;
+      background:rgba(255,255,255,0.12); backdrop-filter:blur(6px);
+      font-size:14px; font-weight:600; color:#f0f0f0; text-shadow:1px 1px 3px #000;
+    }
+    .info-box svg { width:18px; height:18px; }
+    .xp-rank {
+      margin-top:12px; padding:8px; border-radius:10px;
+      background:rgba(255, 230, 102, 0.12);
+      border:1px solid rgba(255,230,102,0.25);
+      font-weight:700; font-size:15px; text-align:center;
+      color:#ffe066; text-shadow:0 0 8px rgba(255,255,150,0.6), 1px 1px 4px #000;
+    }
+
+    /* Halo glows still live on the outer card */
+    .mega-card {
+      box-shadow: 0 0 20px rgba(111, 66, 193, 0.9), 0 0 40px rgba(111, 66, 193, 0.6);
+    }
+    .mythical-card {
+      box-shadow: 0 0 20px rgba(255, 215, 0, 0.9), 0 0 40px rgba(255, 255, 255, 0.8);
+      animation: sparkle 2s infinite linear;
+    }
+    @keyframes sparkle {
+      0% { box-shadow: 0 0 10px rgba(255,215,0,0.8), 0 0 20px rgba(255,255,255,0.6); }
+      50% { box-shadow: 0 0 25px rgba(255,255,150,1), 0 0 50px rgba(255,255,255,0.9); }
+      100% { box-shadow: 0 0 10px rgba(255,215,0,0.8), 0 0 20px rgba(255,255,255,0.6); }
+    }
+
+    /* Badges duplicated inside each face so they flip too */
+    .mega-badge,
+    .mythical-badge {
+      position: absolute;
+      top: 8px; right: 12px;
+      font-size: 12px; font-weight: 900;
+      padding: 4px 8px;
+      border-radius: 6px;
+      text-transform: uppercase;
+      box-shadow: 0 0 6px rgba(0,0,0,0.6);
+      z-index: 2;
+      pointer-events: none; /* never block flip clicks */
+    }
+    .mega-badge { background: linear-gradient(90deg, #6f42c1, #b88fff); color: white; }
+    .mythical-badge { background: linear-gradient(90deg, #ffd700, #fffbe0); color: #222; }
+  </style>
+</head>
+<body class="bg-gradient-to-r from-indigo-500 to-purple-700 min-h-screen flex flex-col items-center p-6">
+
+  <h1 class="text-3xl font-bold text-white mb-6">Pokémon Trainer Cards</h1>
+
+  <!-- Filters -->
+  <div class="flex flex-wrap gap-2 mb-6">
+    <select id="subjectSelect" class="p-2 rounded-lg shadow-md w-48">
+      <option value="">Select Subject</option>
+    </select>
+    <select id="sectionSelect" class="p-2 rounded-lg shadow-md w-40">
+      <option value="">Select Section</option>
+    </select>
+    <select id="pokemonSelect" class="p-2 rounded-lg shadow-md w-56">
+      <option value="">Select Pokémon (optional)</option>
+    </select>
+    <button id="searchBtn" class="bg-yellow-400 hover:bg-yellow-500 px-4 py-2 rounded-lg font-bold shadow-md">
+      Search
+    </button>
+  </div>
+
+  <!-- Cards Container -->
+  <div id="cardsContainer" class="flex flex-wrap justify-center gap-4 w-full max-w-6xl"></div>
+
+<script>
+  // CSV URL
+  const sheetUrl = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSckjY-Sl3sppdhp5bmiGCsU59AfaDAaX0JW0rFngAeJ6OEdkis41DhAWvfT3fgtHojy3zGPUUUYXY8/pub?output=csv";
+
+  // Behavior flags
+  const midtermAutoEvolveNonLevel = true;  // front (midterm) will auto-evolve non-level evolutions if true
+  const finalAutoEvolveNonLevel   = false; // back (final) will NOT auto-evolve non-level evolutions by default
+  const finalStartFromBase        = true;  // final evolution calculation starts from CSV base Pokémon (not front-resolved)
+
+  // In-memory data + caches
+  let students = [];
+  const pokeCache = new Map();
+  const evoCache = new Map();
+
+  const norm = s => (s ?? "").toString().trim().toLowerCase();
+
+  // Normalize names for PokeAPI (slugs)
+  function toApiName(name) {
+    return (name ?? "")
+      .toString()
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, "-")
+      .replace(/♀/g, "-f")
+      .replace(/♂/g, "-m")
+      .replace(/\./g, "")
+      .replace(/'/g, "")
+      .replace(/:/g, "");
+  }
+
+  // Prettify API-style names (e.g. "mr-mime" => "Mr Mime")
+  function prettify(apiName) {
+    if (!apiName) return "";
+    return apiName
+      .toString()
+      .replace(/-/g, " ")
+      .split(" ")
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(" ");
+  }
+
+  // Rank / level helpers (unchanged logic)
+  function gradeToRank(xp) {
+    xp = parseInt(xp || 0, 10);
+    if (xp >= 461) return "Mythical Pokémon";
+    if (xp >= 401) return "Mega Evolution";
+    if (xp >= 341) return "Stage 2 Evolution";
+    if (xp >= 281) return "Stage 1 Evolution";
+    if (xp >= 241) return "Basic Stage";
+    return "Egg";
+  }
+  function finalRank(xp) {
+    xp = parseInt(xp || 0, 10);
+    if (xp >= 921) return "Mythical Pokémon";
+    if (xp >= 861) return "Mega Evolution";
+    if (xp >= 741) return "Stage 2 Evolution";
+    if (xp >= 621) return "Stage 1 Evolution";
+    if (xp >= 481) return "Basic Stage";
+    return "Egg";
+  }
+  function xpToLevel(xp) {
+    xp = parseInt(xp || 0, 10);
+    const lvl = Math.floor((xp / 500) * 100);
+    return Math.min(100, Math.max(1, lvl));
+  }
+  function xpToFinalLevel(xp) {
+    xp = parseInt(xp || 0, 10);
+    const lvl = Math.floor((xp / 1000) * 100);
+    return Math.min(100, Math.max(1, lvl));
+  }
+  function xpToMidtermGrade(xp) {
+    xp = parseInt(xp || 0, 10);
+    if (xp >= 0 && xp <= 200) return "5.00";
+    if (xp >= 201 && xp <= 240) return "4.00";
+    if (xp >= 241 && xp <= 250) return "3.00";
+    if (xp >= 251 && xp <= 280) return "2.75";
+    if (xp >= 281 && xp <= 310) return "2.50";
+    if (xp >= 311 && xp <= 340) return "2.25";
+    if (xp >= 341 && xp <= 370) return "2.00";
+    if (xp >= 371 && xp <= 400) return "1.75";
+    if (xp >= 401 && xp <= 430) return "1.50";
+    if (xp >= 431 && xp <= 460) return "1.25";
+    if (xp >= 461) return "1.00";
+    return "5.00";
+  }
+  function xpToFinalGrade(xp) {
+    xp = parseInt(xp || 0, 10);
+    if (xp >= 0 && xp <= 400) return "5.00";
+    if (xp >= 401 && xp <= 480) return "4.00";
+    if (xp >= 481 && xp <= 500) return "3.00";
+    if (xp >= 501 && xp <= 560) return "2.75";
+    if (xp >= 561 && xp <= 620) return "2.50";
+    if (xp >= 621 && xp <= 680) return "2.25";
+    if (xp >= 681 && xp <= 740) return "2.00";
+    if (xp >= 741 && xp <= 800) return "1.75";
+    if (xp >= 801 && xp <= 860) return "1.50";
+    if (xp >= 861 && xp <= 920) return "1.25";
+    if (xp >= 921) return "1.00";
+    return "5.00";
+  }
+
+  // ---- CSV loader ----
+  async function loadStudentData() {
+    const res = await fetch(sheetUrl);
+    const csv = await res.text();
+    const parsed = Papa.parse(csv, { header: true, skipEmptyLines: true });
+
+    students = parsed.data.map(row => ({
+      trainer: (row.Trainer ?? row.Name ?? row["Student"] ?? "").toString().trim(),
+      section: (row.Section ?? "").toString().trim(),
+      subject: (row.Subject ?? "").toString().trim(),
+      pokemon: (row.Pokemon ?? row["Pokémon"] ?? "").toString().trim(),
+      xp: (row.XP ?? row["Exp"] ?? row["Base XP"] ?? "0").toString().trim()
+    })).filter(r => r.trainer || r.section || r.subject || r.pokemon);
+
+    populateSubjects();
+  }
+
+  function populateSubjects() {
+    const subjectSelect = document.getElementById("subjectSelect");
+    subjectSelect.innerHTML = '<option value="">Select Subject</option>';
+    const subjectMap = new Map();
+    students.forEach(s => {
+      const n = norm(s.subject);
+      if (n && !subjectMap.has(n)) subjectMap.set(n, s.subject.trim());
+    });
+    [...subjectMap.values()].sort((a,b)=>a.localeCompare(b)).forEach(sub => {
+      const opt = document.createElement("option");
+      opt.value = sub; opt.textContent = sub;
+      subjectSelect.appendChild(opt);
+    });
+    document.getElementById("sectionSelect").innerHTML = '<option value="">Select Section</option>';
+    document.getElementById("pokemonSelect").innerHTML = '<option value="">Select Pokémon (optional)</option>';
+  }
+
+  document.getElementById("subjectSelect").addEventListener("change", () => {
+    const subject = document.getElementById("subjectSelect").value;
+    const sectionSelect = document.getElementById("sectionSelect");
+    sectionSelect.innerHTML = '<option value="">Select Section</option>';
+    document.getElementById("pokemonSelect").innerHTML = '<option value="">Select Pokémon (optional)</option>';
+    if (!subject) return;
+    const sectionMap = new Map();
+    students.filter(s => norm(s.subject) === norm(subject)).forEach(s => {
+      const n = norm(s.section);
+      if (n && !sectionMap.has(n)) sectionMap.set(n, s.section.trim());
+    });
+    [...sectionMap.values()].sort((a,b)=>a.localeCompare(b)).forEach(sec => {
+      const opt = document.createElement("option"); opt.value = sec; opt.textContent = sec; sectionSelect.appendChild(opt);
+    });
+  });
+
+  document.getElementById("sectionSelect").addEventListener("change", () => {
+    const subject = document.getElementById("subjectSelect").value;
+    const section = document.getElementById("sectionSelect").value;
+    const pokemonSelect = document.getElementById("pokemonSelect");
+    pokemonSelect.innerHTML = '<option value="">Select Pokémon (optional)</option>';
+    if (!subject || !section) return;
+    const pokeMap = new Map();
+    students.filter(s => norm(s.subject) === norm(subject) && norm(s.section) === norm(section))
+      .forEach(s => {
+        const n = norm(s.pokemon);
+        if (n && !pokeMap.has(n)) pokeMap.set(n, s.pokemon.trim());
+      });
+    [...pokeMap.values()].sort((a,b)=>a.localeCompare(b)).forEach(pk => {
+      const opt = document.createElement("option"); opt.value = pk; opt.textContent = pk; pokemonSelect.appendChild(opt);
+    });
+  });
+
+  // ---- PokéAPI helpers ----
+  async function fetchPokemon(pokemonName) {
+    const key = toApiName(pokemonName);
+    if (pokeCache.has(key)) return pokeCache.get(key);
+    const res = await fetch(`https://pokeapi.co/api/v2/pokemon/${encodeURIComponent(key)}`);
+    if (!res.ok) throw new Error("Pokémon not found: " + pokemonName);
+    const data = await res.json();
+    pokeCache.set(key, data);
+    return data;
+  }
+
+  async function fetchEvolutionChain(pokemonName) {
+    const key = toApiName(pokemonName);
+    if (evoCache.has(key)) return evoCache.get(key);
+    const speciesRes = await fetch(`https://pokeapi.co/api/v2/pokemon-species/${encodeURIComponent(key)}`);
+    if (!speciesRes.ok) throw new Error("Species not found: " + pokemonName);
+    const speciesData = await speciesRes.json();
+    if (!speciesData.evolution_chain || !speciesData.evolution_chain.url) {
+      evoCache.set(key, null);
+      return null;
+    }
+    const evoRes = await fetch(speciesData.evolution_chain.url);
+    if (!evoRes.ok) { evoCache.set(key, null); return null; }
+    const evoData = await evoRes.json();
+    evoCache.set(key, evoData);
+    return evoData;
+  }
+
+  // findNode: robust compare using toApiName to match sheet names with API names
+  function findNode(chainNode, speciesName) {
+    if (!chainNode) return null;
+    try {
+      if (toApiName(chainNode.species.name) === toApiName(speciesName)) return chainNode;
+    } catch (e) { /* ignore */ }
+    for (const child of chainNode.evolves_to || []) {
+      const r = findNode(child, speciesName);
+      if (r) return r;
+    }
+    return null;
+  }
+
+  // getEvolvedSpeciesName: optionally auto-evolve non-level-based evolutions when allowed
+  function getEvolvedSpeciesName(evoChain, currentName, level, allowNonLevel=false) {
+    if (!evoChain || !evoChain.chain) return currentName;
+    let node = findNode(evoChain.chain, currentName) || findNode(evoChain.chain, evoChain.chain.species.name);
+    if (!node) return currentName;
+    let curNode = node;
+    while (curNode.evolves_to && curNode.evolves_to.length > 0) {
+      let chosen = null;
+      // prefer level-based candidate
+      for (const candidate of curNode.evolves_to) {
+        const details = (candidate.evolution_details && candidate.evolution_details[0]) || null;
+        const minLevel = details && details.min_level;
+        if (typeof minLevel === "number" && level >= minLevel) { chosen = candidate; break; }
+      }
+      // fallback to non-level candidate if allowed
+      if (!chosen && allowNonLevel) chosen = curNode.evolves_to[0];
+      if (!chosen) break;
+      curNode = chosen;
+    }
+    return curNode.species.name || currentName;
+  }
+
+  function hpFromStats(data) {
+    const hpStat = data.stats?.find(s => norm(s.stat?.name) === "hp");
+    return hpStat ? hpStat.base_stat : 60;
+  }
+
+  // ---- UI helpers ----
+  function addBadge(faceEl, rank) {
+    if (rank === "Mega Evolution") {
+      const b = document.createElement("div");
+      b.className = "mega-badge";
+      b.textContent = "Mega Evolution!";
+      faceEl.appendChild(b);
+    }
+    if (rank === "Mythical Pokémon") {
+      const b = document.createElement("div");
+      b.className = "mythical-badge";
+      b.textContent = "Mythical Pokémon";
+      faceEl.appendChild(b);
+    }
+  }
+
+  // Update the back face artwork & text based on FINAL XP/level mapping
+  async function updateBackArtwork(card, student) {
+    const xp = parseInt(student.xp || 0, 10);
+    const levelFinal = xpToFinalLevel(xp);
+    const back = card.querySelector('.card-back');
+    try {
+      const startSpecies = finalStartFromBase ? (student.pokemon || "") : (card.dataset.frontSpecies || student.pokemon || "");
+      const evoData = await fetchEvolutionChain(startSpecies);
+      const finalSpecies = evoData ? getEvolvedSpeciesName(evoData, startSpecies, levelFinal, finalAutoEvolveNonLevel) : startSpecies;
+
+      console.log('BACK RESOLVE:', {trainer: student.trainer, base: startSpecies, finalXP: xp, finalLevel: levelFinal, finalResolved: finalSpecies});
+
+      const pokeDataFinal = await fetchPokemon(finalSpecies);
+      const artworkUrl = pokeDataFinal?.sprites?.other?.['official-artwork']?.front_default || pokeDataFinal?.sprites?.front_default || '';
+
+      // Update header name and HP
+      const headerSpans = back.querySelectorAll('.card-header span');
+      if (headerSpans && headerSpans.length >= 2) {
+        headerSpans[0].textContent = prettify(finalSpecies).toUpperCase();
+        headerSpans[1].textContent = 'HP ' + hpFromStats(pokeDataFinal);
+      }
+
+      // Update artwork image safely: preload then assign with cache-bust
+      const img = back.querySelector('.card-artwork img');
+      if (img) {
+        if (!artworkUrl) {
+          img.src = '';
+          img.alt = prettify(finalSpecies);
+        } else {
+          const preload = new Image();
+          preload.onload = () => {
+            // ensure visible update: add cache-bust timestamp
+            img.src = artworkUrl + (artworkUrl.includes('?') ? '&' : '?') + 'v=' + Date.now();
+            img.alt = prettify(finalSpecies);
+          };
+          preload.onerror = () => {
+            img.alt = prettify(finalSpecies);
+            try { img.src = artworkUrl; } catch (e) { /* ignore */ }
+          };
+          preload.src = artworkUrl;
+        }
+      }
+
+      // Update xp / rank display for final
+      const xpRankEl = back.querySelector('.xp-rank');
+      if (xpRankEl) xpRankEl.innerHTML = `XP: ${xp} • Rank: ${finalRank(xp)} <br> Final Grade: ${xpToFinalGrade(xp)}`;
+
+      // Badges: remove any existing badge then re-add according to final rank
+      back.querySelectorAll('.mega-badge, .mythical-badge').forEach(n => n.remove());
+      addBadge(back, finalRank(xp));
+    } catch (e) {
+      console.error('updateBackArtwork failed', e);
+    }
+  }
+
+  // Create card element (front = midterm view, back = final view)
+  function createCard(student, pokeData, displaySpeciesName, level) {
+    const xp = parseInt(student.xp || 0, 10);
+    const rankFront = gradeToRank(xp);
+    const rankBack = finalRank(xp);
+
+    const imgSrc = pokeData?.sprites?.other?.["official-artwork"]?.front_default || pokeData?.sprites?.front_default || "";
+
+    const nameToShow = prettify(displaySpeciesName || pokeData?.name || student.pokemon || "Pokémon").toUpperCase();
+
+    const card = document.createElement("div");
+    card.className = "pokemon-card";
+
+    // Store the front-resolved species (API canonical name if returned by getEvolvedSpeciesName)
+    card.dataset.frontSpecies = displaySpeciesName || pokeData?.name || student.pokemon || "";
+
+    // Outer glow classes
+    if (rankFront === "Mythical Pokémon" || rankBack === "Mythical Pokémon") {
+      card.classList.add("mythical-card");
+    } else if (rankFront === "Mega Evolution" || rankBack === "Mega Evolution") {
+      card.classList.add("mega-card");
+    }
+
+    const inner = document.createElement("div");
+    inner.className = "card-inner";
+
+    const front = document.createElement("div");
+    front.className = "card-front card-face";
+    front.innerHTML = `
+      <div class="card-header">
+        <span>${nameToShow}</span>
+        <span>HP ${hpFromStats(pokeData)}</span>
+      </div>
+      <div class="card-artwork">
+        <img src="${imgSrc}" alt="${nameToShow}">
+      </div>
+      <div class="card-footer">
+        <div class="info-box"><i data-lucide="school"></i> Section: ${student.section || "-"}</div>
+        <div class="info-box"><i data-lucide="book-open"></i> Subject: ${student.subject || "-"}</div>
+        <div class="xp-rank">
+          XP: ${xp} • Rank: ${rankFront} <br>
+          Midterm Grade: ${xpToMidtermGrade(xp)}
+        </div>
+      </div>
+    `;
+    addBadge(front, rankFront);
+
+    const back = document.createElement("div");
+    back.className = "card-back card-face";
+    back.innerHTML = `
+      <div class="card-header">
+        <span>${nameToShow}</span>
+        <span>HP ${hpFromStats(pokeData)}</span>
+      </div>
+      <div class="card-artwork">
+        <img src="${imgSrc}" alt="${nameToShow}">
+      </div>
+      <div class="card-footer">
+        <div class="info-box"><i data-lucide="school"></i> Section: ${student.section || "-"}</div>
+        <div class="info-box"><i data-lucide="book-open"></i> Subject: ${student.subject || "-"}</div>
+        <div class="xp-rank">
+          XP: ${xp} • Rank: ${rankBack} <br>
+          Final Grade: ${xpToFinalGrade(xp)}
+        </div>
+      </div>
+    `;
+    addBadge(back, rankBack);
+
+    inner.appendChild(front);
+    inner.appendChild(back);
+    card.appendChild(inner);
+
+    // Flip handler: update back when flipped
+    card.addEventListener("click", async () => {
+      card.classList.toggle("flipped");
+      if (card.classList.contains("flipped")) {
+        await updateBackArtwork(card, student);
+      }
+    });
+
+    // Render icons
+    setTimeout(() => lucide.createIcons(), 0);
+
+    return card;
+  }
+
+  // Search handler
+  document.getElementById("searchBtn").addEventListener("click", async () => {
+    const subject = document.getElementById("subjectSelect").value;
+    const section = document.getElementById("sectionSelect").value;
+    const pokemon = document.getElementById("pokemonSelect").value;
+    const container = document.getElementById("cardsContainer");
+    container.innerHTML = "";
+
+    if (!subject || !section) {
+      alert("Please select Subject and Section (Pokémon optional).");
+      return;
+    }
+
+    let list = students.filter(s => norm(s.subject) === norm(subject) && norm(s.section) === norm(section));
+    if (pokemon) list = list.filter(s => norm(s.pokemon) === norm(pokemon));
+
+    if (list.length === 0) {
+      container.innerHTML = `<div class="text-white/90">No records found.</div>`;
+      return;
+    }
+
+    try {
+      const results = await Promise.all(list.map(async (s) => {
+        const level = xpToLevel(s.xp);
+        let displayName = s.pokemon;
+        try {
+          const evoData = await fetchEvolutionChain(s.pokemon);
+          displayName = evoData ? getEvolvedSpeciesName(evoData, s.pokemon, level, midtermAutoEvolveNonLevel) : s.pokemon;
+        } catch (err) {
+          displayName = s.pokemon;
+        }
+
+        console.log('FRONT RESOLVE:', {trainer: s.trainer, base: s.pokemon, midXP: s.xp, midLevel: level, frontResolved: displayName});
+
+        // fetch the artwork/stats for the front-resolved species
+        const pokeData = await fetchPokemon(displayName);
+
+        return { student: s, pokeData, displayName, level };
+      }));
+
+      results.forEach(r => {
+        const card = createCard(r.student, r.pokeData, r.displayName, r.level);
+        container.appendChild(card);
+      });
+
+      lucide.createIcons();
+    } catch (e) {
+      console.error(e);
+      container.innerHTML = `<div class="text-white/90">Error fetching Pokémon data or evolution chains.</div>`;
+    }
+  });
+
+  // Init
+  loadStudentData().then(() => { lucide.createIcons(); });
+</script>
+
+
+
+
+</body>
+</html>

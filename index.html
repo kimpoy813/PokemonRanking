@@ -251,10 +251,30 @@
 
   // ---- CSV loader ----
   async function loadStudentData() {
-    const res = await fetch(sheetUrl);
-    const csv = await res.text();
-    const parsed = Papa.parse(csv, { header: true, skipEmptyLines: true });
+  try {
+    console.log("Fetching sheet URL:", sheetUrl);
+    const res = await fetch(sheetUrl, { method: 'GET', mode: 'cors', cache: 'no-cache', redirect: 'follow' });
+    console.log("Fetch status:", res.status, res.statusText);
+    // show content-type header
+    console.log("Content-Type:", res.headers.get('content-type'));
 
+    const text = await res.text();
+    console.log("Response length:", text.length);
+    console.log("Response preview (first 600 chars):\n", text.slice(0, 600));
+
+    // quick HTML detection:
+    const looksLikeHtml = /<html|<!doctype html/i.test(text);
+    if (looksLikeHtml) {
+      console.error("The response looks like HTML — likely a Google sign-in/permission/redirect page. This means the published CSV URL is not public or the link is wrong.");
+      document.getElementById("cardsContainer").innerHTML =
+        `<div class="text-white/90">CSV fetch returned HTML (probably a sign-in or redirect page). Check that sheet is published to the web and URL includes gid & output=csv.</div>`;
+      return;
+    }
+
+    // Parse CSV with PapaParse (header true)
+    const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
+    console.log("PapaParse meta:", parsed.meta);
+    console.log("First rows:", parsed.data.slice(0,5));
     students = parsed.data.map(row => ({
       trainer: (row.Trainer ?? row.Name ?? row["Student"] ?? "").toString().trim(),
       section: (row.Section ?? "").toString().trim(),
@@ -264,7 +284,13 @@
     })).filter(r => r.trainer || r.section || r.subject || r.pokemon);
 
     populateSubjects();
+    console.log("Loaded students:", students.length);
+  } catch (err) {
+    console.error("loadStudentData() failed:", err);
+    document.getElementById("cardsContainer").innerHTML =
+      `<div class="text-white/90">Failed to fetch CSV: ${err.message}</div>`;
   }
+}
 
   function populateSubjects() {
     const subjectSelect = document.getElementById("subjectSelect");
@@ -602,5 +628,6 @@
 
 </body>
 </html>
+
 
 
